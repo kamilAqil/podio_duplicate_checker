@@ -103,7 +103,7 @@ async function createPodioRecord(rowData, podioClient) {
             "267139876": rowData.Address,
             "267139891": rowData.City,
             "267139892": rowData.State,
-            "267139893": rowData.ZIP,
+            "267570543": rowData.ZIP,// zip old
             "267139894": rowData.Type,
             "267139895": parseInt(rowData.Beds, 10),
             "267139896": parseFloat(rowData.Baths),
@@ -134,7 +134,8 @@ async function createPodioRecord(rowData, podioClient) {
             "267139919": parseInt(rowData['TS Number']) || 0,
             "267140023": 1,
             "267140224": parseFloat(rowData['Default Amt']) || 0,
-            "267140225": parseFloat(rowData['Est Open Loans $']) || 0
+            "267140225": parseFloat(rowData['Est Open Loans $']) || 0,
+            "267568787": 2, // skiptraced yes || no
         }
     };
 
