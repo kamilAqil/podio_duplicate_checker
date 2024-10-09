@@ -33,10 +33,10 @@ async function processCSV(directoryPath, podioClient) {
                     .on('data', async (row) => {
 
                         // Check for duplicates using the specified field IDs
-                        const isDuplicate = await checkForDuplicate(row, podioClient);
-                        console.log('isDuplicate', isDuplicate);
-
-                        if (!isDuplicate) {
+                        const { hasDuplicates, ids } = await checkForDuplicate(row, podioClient);
+                        console.log('hasDuplicates in createStream ',hasDuplicates);
+                        
+                        if (!hasDuplicates) {
                             await createPodioRecord(row, podioClient);
                         } else {
                             console.log(`Skipping duplicate entry for row`, row.Address);
@@ -57,53 +57,75 @@ async function processCSV(directoryPath, podioClient) {
     }
 }
 
-// Function to check if a record already exists in Podio
 async function checkForDuplicate(row, podioClient) {
+
+    // Determine which address to use
+    const propertyAddress = row.Input_Property_Address || row.Address;
+
+    // Check if propertyAddress is not empty
+    if (!propertyAddress || propertyAddress.trim() === '') {
+        return {
+            hasDuplicates: false,
+            ids: []
+        };
+    }
+
     const url = `/item/app/${PODIO_APP_ID}/filter/`;
-    console.log('Processing row', row.Address);
 
     const payload = {
         "filters": {
-            "267139876": row.Address // Address Field ID
+            "267139876": propertyAddress // Use the chosen address Field ID
         },
         "limit": 30, // Optional, adjust as needed
         "offset": 0, // Optional, adjust for pagination if needed
         "remember": false // Optional, set to true if you want to remember the view
     };
 
-    console.log(`Filtering by Name: "${row['Primary Name']}", Address: "${row.Address}"`);
-
     try {
         const response = await podioClient.request('POST', url, payload);
-        console.log(`Response from Podio:`, response.filtered);
+        console.log('podioClient response for checkForDuplicate ', response.filtered);
 
-        // Remove duplicates and delete them from Podio
-        let itemsToReturn;
-        if (response?.items && response.items.length > 1) {
-            itemsToReturn = response.items;
-            console.log('Remaining unique items:', itemsToReturn);
-        } else {
-            itemsToReturn = response.items; // If there's only one item, return it directly
+        // Initialize an array to hold the IDs of duplicate items
+        let duplicateIds = [];
+
+        if (response?.items && response.items.length > 0) {
+            // If duplicates are found, extract their IDs
+            duplicateIds = response.items.map(item => item.item_id);
         }
 
-        return itemsToReturn && itemsToReturn.length > 0;
+        // Return both the boolean indicating if duplicates exist and the array of IDs
+        return {
+            hasDuplicates: duplicateIds.length > 0,
+            ids: duplicateIds
+        };
     } catch (error) {
         console.error(`Error checking for duplicate:`, error.message, error.stack);
-        return false;
+        return {
+            hasDuplicates: false,
+            ids: []
+        }; // Return empty IDs array on error
     }
 }
+
 
 // Function to create a new Podio record
 async function createPodioRecord(rowData, podioClient) {
     const url = `/item/app/${PODIO_APP_ID}/`;
+    // Extract Orig Sale Date and Sale Time from rowData
+    const origSaleDate = rowData['Orig Sale Date'];  // Format: YYYY-MM-DD
+    const saleTime = rowData['Sale Time'];           // Format: HH:MM:SS
+    const fclRecDate = rowData['FCL Rec Date'];      // Format: YYYY-MM-DD
+    const formattedFclRecDateTime = `${fclRecDate} 15:00:00`;  // "2024-09-13 15:00:00"
 
+    // Combine Orig Sale Date and Sale Time into the correct format
+    const formattedSaleDateTime = `${origSaleDate} ${saleTime}`; // "2024-10-18 09:00:00"
     // Construct the payload
     const payload = {
         "fields": {
             "267139876": rowData.Address,
             "267139891": rowData.City,
             "267139892": rowData.State,
-            "267570543": rowData.ZIP,// zip old
+            "267570543": rowData.ZIP, // zip old
             "267139894": rowData.Type,
             "267139895": parseInt(rowData.Beds, 10),
             "267139896": parseFloat(rowData.Baths),
@@ -120,22 +142,23 @@ async function createPodioRecord(rowData, podioClient) {
             "267139912": parseFloat(rowData['Est Value']) || 0,
             "267139913": parseFloat(rowData['Est Open Loans $']) || 0,
             "267139914": parseFloat(rowData['Purchase Amt']) || 0,
-            "267139915": rowData['FCL Stage'] === 'Auction' ? 1 : 0,
-            // Updated date format to include time
+            "267139915": 1,
+            // Use the formatted Orig Sale Date and Sale Time
             "267139916": {
-                "start": "2024-10-09 15:00:00",  // Updated to include time
-                "end": "2024-10-09 15:00:00"     // Updated to include time
+                "start": formattedSaleDateTime,
+                "end": formattedSaleDateTime
             },
+            // FCL Rec Date, using the formatted date and default time
             "267139917": {
-                "start": "2024-08-27 15:00:00",  // Updated to include time
-                "end": "2024-08-27 15:00:00"     // Updated to include time
+                "start": formattedFclRecDateTime,
+                "end": formattedFclRecDateTime
             },
             "267139918": rowData['Sale Place'],
             "267139919": parseInt(rowData['TS Number']) || 0,
             "267140023": 1,
             "267140224": parseFloat(rowData['Default Amt']) || 0,
             "267140225": parseFloat(rowData['Est Open Loans $']) || 0,
-            "267568787": 2, // skiptraced yes || no
+            "267568787": 2 // skiptraced yes || no
         }
     };
 
@@ -144,7 +167,7 @@ async function createPodioRecord(rowData, podioClient) {
 
     try {
         const response = await podioClient.request('POST', url, payload);
-        console.log(`Record created:`, response.fields);
+        console.log(`Record created:`, response.link);
     } catch (error) {
         console.error(`Error creating record:`, error.message);
         console.error(`Error details:`, error);
@@ -175,6 +198,87 @@ async function deleteDuplicates(manicuredDuplicatesArray, podioClient) {
         } catch (error) {
             console.error(`Failed to delete item with ID: ${itemId}`, error.message);
         }
+    }
+}
+
+
+async function processSkippedCsv(directoryPath, podioClient) {
+    try {
+        const files = fs.readdirSync(directoryPath);
+
+        for (const file of files) {
+            const filePath = path.join(directoryPath, file);
+            const stat = fs.statSync(filePath);
+
+            if (stat.isFile() && path.extname(file) === '.csv') {
+                console.log(`Processing file: ${filePath}`);
+
+                fs.createReadStream(filePath)
+                    .pipe(csv())
+                    .on('data', async (row) => {
+                        try {
+                            // Check for duplicates using the specified field IDs (e.g., address or unique identifier)
+                            const { hasDuplicates, ids } = await checkForDuplicate(row, podioClient);
+                            console.log('hasDuplicates', hasDuplicates);
+
+                            if (hasDuplicates) {
+
+                                
+                                let objForUpdate = {
+                                    "fields": { // Wrap your fields inside the "fields" object
+                                        "267139901": [{ "type": "home", "value": row['Phone1_Number'] || '' }],  // Changed "mobile" to "home"
+                                        "267139902": [{ "type": "home", "value": row['Phone2_Number'] || '' }],
+                                        "267139903": [{ "type": "home", "value": row['Phone3_Number'] || '' }],
+                                        "267139904": [{ "type": "home", "value": row['Phone4_Number'] || '' }],
+                                        "267139905": [{ "type": "home", "value": row['Phone5_Number'] || '' }],
+                                        "267139906": [{ "type": "home", "value": row['Phone6_Number'] || '' }],
+                                        "267139907": [{ "type": "home", "value": row['Phone7_Number'] || '' }],
+                                        "267139908": [{ "type": "home", "value": row['Phone8_Number'] || '' }],
+                                        "267139909": [{ "type": "home", "value": row['Phone9_Number'] || '' }],
+                                        "267139910": [{ "type": "home", "value": row['Phone10_Number'] || '' }],
+                                        "267568787": 1
+                                    }
+                                };
+
+                                // Loop through each duplicate ID and update them
+                                for (const id of ids) {
+                                    try {
+                                        const updateUrl = `/item/${id}`; // Correct Podio API URL for updating an item
+                                      
+                                        const response = await podioClient.request('PUT', updateUrl, objForUpdate); // Capture the response from the API
+
+                                        // Check if the response indicates success (you can adjust based on the actual response structure)
+                                        if (response) {
+                                            console.log(`Successfully updated item with ID: ${id}, Response:`, response);                                            
+                                        } else {
+                                            console.log(`Failed to update item with ID: ${id}, Response:`, response);
+                                        }
+                                    } catch (updateError) {
+                                        console.error(`Error updating item with ID: ${id}, Error: ${updateError}`,updateError);
+                                    }
+                                }
+
+
+                                
+                            } else {
+                                console.log(`No duplicate found for row: ${row.Address}, skipping.`);
+                            }
+                        } catch (error) {
+                            console.error(`Error processing row: ${row.Address}, Error: ${error.message}`);
+                        }
+                    })
+                    .on('end', () => {
+                        console.log(`Finished processing file: ${filePath}`);
+                    })
+                    .on('error', (err) => {
+                        console.error(`Error reading file ${filePath}: ${err.message}`);
+                    });
+            } else {
+                console.log(`Skipping non-file or non-CSV item: ${file}`);
+            }
+        }
+    } catch (error) {
+        console.error(`Error processing CSV files: ${error.message}`);
     }
 }
 
@@ -268,6 +372,29 @@ async function getDuplicates(podioClient) {
 
 // main functions to run 
 
+async function updateSkippedRecordsInPodio() {
+    try {
+        await podio.authenticateWithApp(PODIO_APP_ID, PODIO_API_TOKEN, (err) => {
+
+            if (err) throw new Error(err);
+
+            let authenticated_podio = podio.isAuthenticated().then(async() => {
+                // Ready to make API calls in here...
+                console.log('we are authenticated in updateSkippedRecordsInPodio here run stuff ', podio);
+                let csvDirectoryPath = './paste_skipped_csv_here';
+                await processSkippedCsv(csvDirectoryPath,podio);
+
+
+
+                // return podio;
+            }).catch(err => console.log(err));
+            return authenticated_podio;
+        });
+    } catch (error) {
+        console.error('Error authenticating with Podio:', error);
+        throw error;
+    }
+}
 
 async function findAndDeleteDuplicates() {
     try {
@@ -280,7 +407,6 @@ async function findAndDeleteDuplicates() {
 
                 // get array of duplicates
                 let duplicates = await getDuplicates(podio);
-                // console.log('duplicates in findAndDeleteDuplicates', duplicates);
                 let manicuredDuplicatesArray = combineAllDuplicates(duplicates);
                 await deleteDuplicates(manicuredDuplicatesArray, podio)
 
@@ -304,7 +430,7 @@ async function inputRecords() {
 
             let authenticated_podio = podio.isAuthenticated().then(() => {
                 // Ready to make API calls in here...
-                console.log('we are authenticated here run stuff ', podio);
+                console.log('we are authenticated here run stuff ');
 
                 processCSV(csvDirectoryPath, podio);
 
@@ -321,8 +447,9 @@ async function inputRecords() {
 
 async function main() {
     try {
-       await inputRecords();
+    //    await inputRecords();
     // await findAndDeleteDuplicates();
+        await updateSkippedRecordsInPodio();
     } catch (error) {
         console.error('Error during the process:', error);
     }
