@@ -56,6 +56,45 @@ async function processCSV(directoryPath, podioClient) {
         console.error(`Error processing CSV files: ${error.message}`);
     }
 }
+async function processCSVForNOD(directoryPath, podioClient) {
+    try {
+        const files = fs.readdirSync(directoryPath);
+
+        for (const file of files) {
+            const filePath = path.join(directoryPath, file);
+            const stat = fs.statSync(filePath);
+
+            if (stat.isFile() && path.extname(file) === '.csv') {
+                console.log(`Processing file: ${filePath}`);
+
+                fs.createReadStream(filePath)
+                    .pipe(csv())
+                    .on('data', async (row) => {
+
+                        // Check for duplicates using the specified field IDs
+                        const { hasDuplicates, ids } = await checkForDuplicate(row, podioClient);
+                        console.log('hasDuplicates in createStream ', hasDuplicates);
+
+                        if (!hasDuplicates) {
+                            await createNODPodioRecord(row, podioClient);
+                        } else {
+                            console.log(`Skipping duplicate entry for row`, row.Address);
+                        }
+                    })
+                    .on('end', () => {
+                        console.log(`Finished processing file: ${filePath}`);
+                    })
+                    .on('error', (err) => {
+                        console.error(`Error reading file ${filePath}: ${err.message}`);
+                    });
+            } else {
+                console.log(`Skipping non-file or non-CSV item: ${file}`);
+            }
+        }
+    } catch (error) {
+        console.error(`Error processing CSV files: ${error.message}`);
+    }
+}
 
 async function checkForDuplicate(row, podioClient) {
 
@@ -111,11 +150,72 @@ async function checkForDuplicate(row, podioClient) {
 // Function to create a new Podio record
 async function createPodioRecord(rowData, podioClient) {
     const url = `/item/app/${PODIO_APP_ID}/`;
+    // Format: HH:MM:SS
+    const fclRecDate = rowData['FCL Rec Date'];      // Format: YYYY-MM-DD
+    const formattedFclRecDateTime = `${fclRecDate} 15:00:00`;  // "2024-09-13 15:00:00"
+
+   
+    // Construct the payload
+    const payload = {
+        "fields": {
+            "267139876": rowData.Address,
+            "267139891": rowData.City,
+            "267139892": rowData.State,
+            "267570543": rowData.ZIP, // zip old
+            "267139894": rowData.Type,
+            "267139895": parseInt(rowData.Beds, 10),
+            "267139896": parseFloat(rowData.Baths),
+            "267139897": parseInt(rowData['Sq Ft'], 10),
+            "267139898": parseInt(rowData['Yr Built'], 10),
+            "267139899": rowData['Primary Name'],
+            "267139900": rowData['Secondary Name'] || 'N/A',
+            "267139901": [{ "type": "mobile", "value": rowData['Primary Phone1'] || '' }],
+            "267139902": [{ "type": "mobile", "value": rowData['Primary Mobile Phone1'] || '' }],
+            "267139903": [{ "type": "mobile", "value": rowData['Secondary Phone1'] || '' }],
+            "267139904": [{ "type": "mobile", "value": rowData['Secondary Mobile Phone1'] || '' }],
+            "267139910": [{ "type": "other", "value": rowData['Primary Email1'] || '' }],
+            "267139911": [{ "type": "other", "value": rowData['Secondary Email1'] || '' }],
+            "267139912": parseFloat(rowData['Est Value']) || 0,
+            "267139913": parseFloat(rowData['Est Open Loans $']) || 0,
+            "267139914": parseFloat(rowData['Purchase Amt']) || 0,
+            "267139915": 1,
+            // Use the formatted Orig Sale Date and Sale Time
+            // "267139916": {
+            //     "start": formattedSaleDateTime,
+            //     "end": formattedSaleDateTime
+            // },
+            // FCL Rec Date, using the formatted date and default time
+            "267139917": {
+                "start": formattedFclRecDateTime,
+                "end": formattedFclRecDateTime
+            },
+            "267139918": rowData['Sale Place'],
+            "267139919": parseInt(rowData['TS Number']) || 0,
+            "267140023": 1,
+            "267140224": parseFloat(rowData['Default Amt']) || 0,
+            "267140225": parseFloat(rowData['Est Open Loans $']) || 0,
+            "267568787": 2 // skiptraced yes || no
+        }
+    };
+
+
+    // Log the payload before sending
+
+    try {
+        const response = await podioClient.request('POST', url, payload);
+        console.log(`Record created:`, response.link);
+    } catch (error) {
+        console.error(`Error creating record:`, error.message);
+        console.error(`Error details:`, error);
+    }
+}
+async function createNODPodioRecord(rowData, podioClient) {
+    const url = `/item/app/${PODIO_APP_ID}/`;
     // Extract Orig Sale Date and Sale Time from rowData
     const origSaleDate = rowData['Orig Sale Date'];  // Format: YYYY-MM-DD
     const saleTime = rowData['Sale Time'];           // Format: HH:MM:SS
     const fclRecDate = rowData['FCL Rec Date'];      // Format: YYYY-MM-DD
-    const formattedFclRecDateTime = `${fclRecDate} 15:00:00`;  // "2024-09-13 15:00:00"
+        const formattedFclRecDateTime = `${fclRecDate} 15:00:00`;  // "2024-09-13 15:00:00"
 
     // Combine Orig Sale Date and Sale Time into the correct format
     const formattedSaleDateTime = `${origSaleDate} ${saleTime}`; // "2024-10-18 09:00:00"
@@ -142,7 +242,8 @@ async function createPodioRecord(rowData, podioClient) {
             "267139912": parseFloat(rowData['Est Value']) || 0,
             "267139913": parseFloat(rowData['Est Open Loans $']) || 0,
             "267139914": parseFloat(rowData['Purchase Amt']) || 0,
-            "267139915": 1,
+            // sttatus nod
+            "267139915": 4,
             // Use the formatted Orig Sale Date and Sale Time
             "267139916": {
                 "start": formattedSaleDateTime,
@@ -164,14 +265,16 @@ async function createPodioRecord(rowData, podioClient) {
 
 
     // Log the payload before sending
-
-    try {
-        const response = await podioClient.request('POST', url, payload);
-        console.log(`Record created:`, response.link);
-    } catch (error) {
-        console.error(`Error creating record:`, error.message);
-        console.error(`Error details:`, error);
+    if (formattedFclRecDateTime) {
+        try {
+            const response = await podioClient.request('POST', url, payload);
+            console.log(`Record created:`, response.link);
+        } catch (error) {
+            console.error(`Error creating record:`, error.message);
+            console.error(`Error details:`, error);
+        }
     }
+    
 }
 
 // Example usage: authenticate first, then process CSV
@@ -420,7 +523,7 @@ async function findAndDeleteDuplicates() {
     }
 }
 
-async function inputRecords() {
+async function inputNTSRecords() {
 
 
     try {
@@ -445,11 +548,37 @@ async function inputRecords() {
     }
 }
 
+async function inputNODRecords() {
+
+
+    try {
+        await podio.authenticateWithApp(PODIO_APP_ID, PODIO_API_TOKEN, (err) => {
+
+            if (err) throw new Error(err);
+
+            let authenticated_podio = podio.isAuthenticated().then(() => {
+                // Ready to make API calls in here...
+                console.log('we are authenticated here run stuff ');
+
+                processCSVForNOD(csvDirectoryPath, podio);
+
+
+                // return podio;
+            }).catch(err => console.log(err));
+            return authenticated_podio;
+        });
+    } catch (error) {
+        console.error('Error authenticating with Podio:', error);
+        throw error;
+    }
+}
+
 async function main() {
     try {
-    //    await inputRecords();
+        await inputNODRecords();    
+    //    await inputNTSRecords();
     // await findAndDeleteDuplicates();
-        await updateSkippedRecordsInPodio();
+    // await updateSkippedRecordsInPodio();
     } catch (error) {
         console.error('Error during the process:', error);
     }
