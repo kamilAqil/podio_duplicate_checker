@@ -39,46 +39,55 @@ async function processCSV(directoryPath, podioClient) {
                         if (!hasDuplicates) {
                             await createPodioRecord(row, podioClient);
                         } else {
-                            console.log(`Skipping duplicate entry for row`, row.Address);
-                        }
-                    })
-                    .on('end', () => {
-                        console.log(`Finished processing file: ${filePath}`);
-                    })
-                    .on('error', (err) => {
-                        console.error(`Error reading file ${filePath}: ${err.message}`);
-                    });
-            } else {
-                console.log(`Skipping non-file or non-CSV item: ${file}`);
-            }
-        }
-    } catch (error) {
-        console.error(`Error processing CSV files: ${error.message}`);
-    }
-}
-async function processCSVForNOD(directoryPath, podioClient) {
-    try {
-        const files = fs.readdirSync(directoryPath);
+                            console.log(`Updating Row`, row.Address);
+                            // need to update the record here
 
-        for (const file of files) {
-            const filePath = path.join(directoryPath, file);
-            const stat = fs.statSync(filePath);
+                            // Prepare the object for update
+                            const objForUpdate = {
+                                fields: {}
+                            };
+                            // Helper function to add fields dynamically with validation
+                            function addFieldForUpdate(key, value) {
+                                if (value !== undefined && value !== null && value !== '') {
+                                    objForUpdate.fields[key] = value;
+                                }
+                            }
+                            // Dynamically populate fields
+                            // if(row['Primary Email1']){
+                            //     addFieldForUpdate("267139910", row['Primary Email1'], (val) => [{ type: "other", value: val }]);
+                            // }
+                            // if(row['Secondary Email1']){
+                            //     addFieldForUpdate("267139911", row['Secondary Email1'], (val) => [{ type: "other", value: val }]);
+                            // }
+                            addFieldForUpdate("267139912", row['Est Value'], (val) => parseFloat(val) || 0);
+                            addFieldForUpdate("267139913", row['Est Open Loans $'], (val) => parseFloat(val) || 0);
+                            addFieldForUpdate("267139914", row['Purchase Amt'], (val) => parseFloat(val) || 0);
+                            addFieldForUpdate("267140224", row['Default Amt'], (val) => parseFloat(val) || 0);
+                            addFieldForUpdate("267140225", row['FCL Loan Amt'], (val) => parseFloat(val) || 0);
+                            addFieldForUpdate("268908454", row['Est Equity %'], (val) => parseFloat(val) || 0);
+                            addFieldForUpdate("268908455", row['Est Equity $'], (val) => parseFloat(val) || 0);
+                            addFieldForUpdate("268908456", row['CLTV %'], (val) => parseFloat(val) || 0);
+                            addFieldForUpdate("267139915", row['FCL Stage'], (val) => [{ value: val }]);
+                            addFieldForUpdate("268923789", row['Property URL'], (val) => [{ value: val }]);
+                            addFieldForUpdate("267568787", 2, (val) => parseFloat(val) || 0);
+                            
+                            // Loop through each duplicate ID and update them
+                            for (const id of ids) {
+                                try {
+                                    const updateUrl = `/item/${id}`; // Correct Podio API URL for updating an item
 
-            if (stat.isFile() && path.extname(file) === '.csv') {
-                console.log(`Processing file: ${filePath}`);
+                                    const response = await podioClient.request('PUT', updateUrl, objForUpdate); // Capture the response from the API
 
-                fs.createReadStream(filePath)
-                    .pipe(csv())
-                    .on('data', async (row) => {
-
-                        // Check for duplicates using the specified field IDs
-                        const { hasDuplicates, ids } = await checkForDuplicate(row, podioClient);
-                        console.log('hasDuplicates in createStream ', hasDuplicates);
-
-                        if (!hasDuplicates) {
-                            await createNODPodioRecord(row, podioClient);
-                        } else {
-                            console.log(`Skipping duplicate entry for row`, row.Address);
+                                    // Check if the response indicates success (you can adjust based on the actual response structure)
+                                    if (response) {
+                                        console.log(`Successfully updated item with ID: ${id}, Response:`, response);
+                                    } else {
+                                        console.log(`Failed to update item with ID: ${id}, Response:`, response);
+                                    }
+                                } catch (updateError) {
+                                    console.error(`Error updating item with ID: ${id}, Error: ${updateError}`, updateError);
+                                }
+                            }
                         }
                     })
                     .on('end', () => {
@@ -146,57 +155,90 @@ async function checkForDuplicate(row, podioClient) {
     }
 }
 
+function validateDateTime(value) {
+    // Regular expression to validate format: YYYY-MM-DD HH:MM:SS
+    const dateTimeRegex = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+    return value && dateTimeRegex.test(value); // Ensure value is not null and matches format
+}
+
+
 
 // Function to create a new Podio record
 async function createPodioRecord(rowData, podioClient) {
     const url = `/item/app/${PODIO_APP_ID}/`;
-    // Format: HH:MM:SS
-    const fclRecDate = rowData['FCL Rec Date'];      // Format: YYYY-MM-DD
-    const formattedFclRecDateTime = `${fclRecDate} 15:00:00`;  // "2024-09-13 15:00:00"
+    // Format dates
+    const fclRecDate = rowData['FCL Rec Date']; // Assuming this is in MM/DD/YY format
+    const formattedFclRecDateTime = `${formatDate(fclRecDate)} 15:00:00`;
 
-   
-    // Construct the payload
+    const fclAuctionDate = rowData['Orig Sale Date']; // Assuming this is in MM/DD/YY format
+    const formattedFclAuctionDateTime = `${formatDate(fclAuctionDate)} 15:00:00`;
+
+    
+
     const payload = {
-        "fields": {
-            "267139876": rowData.Address,
-            "267139891": rowData.City,
-            "267139892": rowData.State,
-            "267570543": rowData.ZIP, // zip old
-            "267139894": rowData.Type,
-            "267139895": parseInt(rowData.Beds, 10),
-            "267139896": parseFloat(rowData.Baths),
-            "267139897": parseInt(rowData['Sq Ft'], 10),
-            "267139898": parseInt(rowData['Yr Built'], 10),
-            "267139899": rowData['Primary Name'],
-            "267139900": rowData['Secondary Name'] || 'N/A',
-            "267139901": [{ "type": "mobile", "value": rowData['Primary Phone1'] || '' }],
-            "267139902": [{ "type": "mobile", "value": rowData['Primary Mobile Phone1'] || '' }],
-            "267139903": [{ "type": "mobile", "value": rowData['Secondary Phone1'] || '' }],
-            "267139904": [{ "type": "mobile", "value": rowData['Secondary Mobile Phone1'] || '' }],
-            "267139910": [{ "type": "other", "value": rowData['Primary Email1'] || '' }],
-            "267139911": [{ "type": "other", "value": rowData['Secondary Email1'] || '' }],
-            "267139912": parseFloat(rowData['Est Value']) || 0,
-            "267139913": parseFloat(rowData['Est Open Loans $']) || 0,
-            "267139914": parseFloat(rowData['Purchase Amt']) || 0,
-            "267139915": 1,
-            // Use the formatted Orig Sale Date and Sale Time
-            // "267139916": {
-            //     "start": formattedSaleDateTime,
-            //     "end": formattedSaleDateTime
-            // },
-            // FCL Rec Date, using the formatted date and default time
-            "267139917": {
-                "start": formattedFclRecDateTime,
-                "end": formattedFclRecDateTime
-            },
-            "267139918": rowData['Sale Place'],
-            "267139919": parseInt(rowData['TS Number']) || 0,
-            "267140023": 1,
-            "267140224": parseFloat(rowData['Default Amt']) || 0,
-            "267140225": parseFloat(rowData['Est Open Loans $']) || 0,
-            "267568787": 2 // skiptraced yes || no
-        }
+        fields: {}
     };
+
+    // Helper function to add fields only if they exist and are valid
+    function addField(key, value) {
+        if (value !== undefined && value !== null && value !== '') {
+            payload.fields[key] = value;
+        }
+    }
+
+    
+    // Add fields with validation
+    addField("267139876", rowData.Address);
+    addField("267139891", rowData.City);
+    addField("267139892", rowData.State);
+    addField("267570543", rowData.ZIP);
+    addField("267139894", rowData.Type);
+    addField("267139895", rowData.Beds, (val) => parseInt(val, 10));
+    addField("267139896", rowData.Baths, (val) => parseFloat(val));
+    addField("267139897", rowData['Sq Ft'], (val) => parseInt(val, 10));
+    addField("267139898", rowData['Yr Built'], (val) => parseInt(val, 10));
+    addField("267139899", rowData['Primary Name']);
+    addField("267139900", rowData['Secondary Name'], (val) => val || 'N/A');
+    // addField("267139901", rowData['Primary Phone1'], (val) => [{ type: "mobile", value: val }]);
+    // addField("267139902", rowData['Primary Mobile Phone1'], (val) => [{ type: "mobile", value: val }]);
+    // addField("267139903", rowData['Secondary Phone1'], (val) => [{ type: "mobile", value: val }]);
+    // addField("267139904", rowData['Secondary Mobile Phone1'], (val) => [{ type: "mobile", value: val }]);
+    // addField("267139910", rowData['Primary Email1'], (val) => [{ type: "other", value: val }]);
+    // addField("267139911", rowData['Secondary Email1'], (val) => [{ type: "other", value: val }]);
+    addField("267139912", rowData['Est Value'], (val) => parseFloat(val) || 0);
+    addField("267139913", rowData['Est Open Loans $'], (val) => parseFloat(val) || 0);
+    addField("267139914", rowData['Purchase Amt'], (val) => parseFloat(val) || 0);
+    addField("267140224", rowData['Default Amt'], (val) => parseFloat(val) || 0);
+    addField("267140225", rowData['FCL Loan Amt'], (val) => parseFloat(val) || 0);
+    addField("267568787", rowData['Skiptraced'], (val) => val === "Yes" ? 1 : 2);
+    addField("268908454", rowData['Est Equity %'], (val) => parseFloat(val) || 0);
+    addField("268908455", rowData['Est Equity $'], (val) => parseFloat(val) || 0);
+    addField("268908456", rowData['CLTV %'], (val) => parseFloat(val) || 0);
+    addField("267139915", rowData['FCL Stage']);
+    // Add fields with validation
+    if (fclAuctionDate){
+        addField("267139916", formattedFclAuctionDateTime, (val) => val ? { start: val, end: val } : undefined);
+    }
+    // Your existing code
+    if (formattedFclRecDateTime && validateDateTime(formattedFclRecDateTime)) {
+        addField("267139917", formattedFclRecDateTime, (val) =>
+            val ? { start: val, end: val } : undefined
+        );
+    } else {
+        console.log("Date is null or invalid, omitting field.");
+    }
+    addField("267139918", rowData['Sale Place']);
+    addField("268923789", rowData['Property URL']);
+    // Uncomment and add missing fields if needed
+    // addField("267139920", rowData.County);
+    // addField("267139921", rowData['Site Vacant?'], (val) => val ? 1 : 2);
+    // addField("267139922", rowData['Tax Delinquent $'], (val) => parseFloat(val) || 0);
+    // addField("267139923", rowData['Listing Status']);
+    // addField("267139924", rowData['Lis Pendens Type']);
+    // addField("267139925", rowData.Trustee);
+    // addField("267139926", rowData.Attorney);
+    // addField("267139927", rowData['Case Number']);
+
 
 
     // Log the payload before sending
@@ -205,76 +247,11 @@ async function createPodioRecord(rowData, podioClient) {
         const response = await podioClient.request('POST', url, payload);
         console.log(`Record created:`, response.link);
     } catch (error) {
+
         console.error(`Error creating record:`, error.message);
-        console.error(`Error details:`, error);
+        console.log('payload was', payload);
+        
     }
-}
-async function createNODPodioRecord(rowData, podioClient) {
-    const url = `/item/app/${PODIO_APP_ID}/`;
-    // Extract Orig Sale Date and Sale Time from rowData
-    const origSaleDate = rowData['Orig Sale Date'];  // Format: YYYY-MM-DD
-    const saleTime = rowData['Sale Time'];           // Format: HH:MM:SS
-    const fclRecDate = rowData['FCL Rec Date'];      // Format: YYYY-MM-DD
-        const formattedFclRecDateTime = `${fclRecDate} 15:00:00`;  // "2024-09-13 15:00:00"
-
-    // Combine Orig Sale Date and Sale Time into the correct format
-    const formattedSaleDateTime = `${origSaleDate} ${saleTime}`; // "2024-10-18 09:00:00"
-    // Construct the payload
-    const payload = {
-        "fields": {
-            "267139876": rowData.Address,
-            "267139891": rowData.City,
-            "267139892": rowData.State,
-            "267570543": rowData.ZIP, // zip old
-            "267139894": rowData.Type,
-            "267139895": parseInt(rowData.Beds, 10),
-            "267139896": parseFloat(rowData.Baths),
-            "267139897": parseInt(rowData['Sq Ft'], 10),
-            "267139898": parseInt(rowData['Yr Built'], 10),
-            "267139899": rowData['Primary Name'],
-            "267139900": rowData['Secondary Name'] || 'N/A',
-            "267139901": [{ "type": "mobile", "value": rowData['Primary Phone1'] || '' }],
-            "267139902": [{ "type": "mobile", "value": rowData['Primary Mobile Phone1'] || '' }],
-            "267139903": [{ "type": "mobile", "value": rowData['Secondary Phone1'] || '' }],
-            "267139904": [{ "type": "mobile", "value": rowData['Secondary Mobile Phone1'] || '' }],
-            "267139910": [{ "type": "other", "value": rowData['Primary Email1'] || '' }],
-            "267139911": [{ "type": "other", "value": rowData['Secondary Email1'] || '' }],
-            "267139912": parseFloat(rowData['Est Value']) || 0,
-            "267139913": parseFloat(rowData['Est Open Loans $']) || 0,
-            "267139914": parseFloat(rowData['Purchase Amt']) || 0,
-            // sttatus nod
-            "267139915": 4,
-            // Use the formatted Orig Sale Date and Sale Time
-            "267139916": {
-                "start": formattedSaleDateTime,
-                "end": formattedSaleDateTime
-            },
-            // FCL Rec Date, using the formatted date and default time
-            "267139917": {
-                "start": formattedFclRecDateTime,
-                "end": formattedFclRecDateTime
-            },
-            "267139918": rowData['Sale Place'],
-            "267139919": parseInt(rowData['TS Number']) || 0,
-            "267140023": 1,
-            "267140224": parseFloat(rowData['Default Amt']) || 0,
-            "267140225": parseFloat(rowData['Est Open Loans $']) || 0,
-            "267568787": 2 // skiptraced yes || no
-        }
-    };
-
-
-    // Log the payload before sending
-    if (formattedFclRecDateTime) {
-        try {
-            const response = await podioClient.request('POST', url, payload);
-            console.log(`Record created:`, response.link);
-        } catch (error) {
-            console.error(`Error creating record:`, error.message);
-            console.error(`Error details:`, error);
-        }
-    }
-    
 }
 
 // Example usage: authenticate first, then process CSV
@@ -470,6 +447,30 @@ async function getDuplicates(podioClient) {
 }
 
 
+function formatDate(dateStr) {
+    // Parse the input date string
+    const date = new Date(dateStr); // Automatically parses MM/DD/YYYY format
+
+    if(date){
+        // Check if the date is valid
+        if (isNaN(date.getTime())) {
+            console.error('Invalid date format');
+            return null;
+        }
+
+        // Format the date into YYYY-MM-DD
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0'); // Months are 0-based, so add 1
+        const day = String(date.getDate()).padStart(2, '0');
+
+
+        // Return the full formatted string
+        return `${year}-${month}-${day}`;
+    }else{
+        return null;
+    }
+}
+
 
 
 
@@ -548,35 +549,11 @@ async function inputNTSRecords() {
     }
 }
 
-async function inputNODRecords() {
 
-
-    try {
-        await podio.authenticateWithApp(PODIO_APP_ID, PODIO_API_TOKEN, (err) => {
-
-            if (err) throw new Error(err);
-
-            let authenticated_podio = podio.isAuthenticated().then(() => {
-                // Ready to make API calls in here...
-                console.log('we are authenticated here run stuff ');
-
-                processCSVForNOD(csvDirectoryPath, podio);
-
-
-                // return podio;
-            }).catch(err => console.log(err));
-            return authenticated_podio;
-        });
-    } catch (error) {
-        console.error('Error authenticating with Podio:', error);
-        throw error;
-    }
-}
 
 async function main() {
     try {
-        await inputNODRecords();    
-    //    await inputNTSRecords();
+       await inputNTSRecords();
     // await findAndDeleteDuplicates();
     // await updateSkippedRecordsInPodio();
     } catch (error) {
