@@ -31,54 +31,56 @@ async function processCSV(directoryPath, podioClient) {
                 fs.createReadStream(filePath)
                     .pipe(csv())
                     .on('data', async (row) => {
+                        const latitude = parseFloat(row['Latitude']);
+                        const longitude = parseFloat(row['Longitude']);
+
+                        // Skip if latitude or longitude is missing or invalid
+                        if (isNaN(latitude) || isNaN(longitude)) {
+                            console.warn(`Skipping row with invalid/missing lat/long: ${row.Address}`);
+                            return;
+                        }
 
                         // Check for duplicates using the specified field IDs
                         const { hasDuplicates, ids } = await checkForDuplicate(row, podioClient);
-                        console.log('hasDuplicates in createStream ',hasDuplicates);
-                        
+                        console.log('hasDuplicates in createStream ', hasDuplicates);
+
                         if (!hasDuplicates) {
                             await createPodioRecord(row, podioClient);
                         } else {
                             console.log(`Updating Row`, row.Address);
-                            // need to update the record here
 
-                            // Prepare the object for update
                             const objForUpdate = {
                                 fields: {}
                             };
-                            // Helper function to add fields dynamically with validation
-                            function addFieldForUpdate(key, value) {
+
+                            function addFieldForUpdate(key, value, transform = (v) => v) {
                                 if (value !== undefined && value !== null && value !== '') {
-                                    objForUpdate.fields[key] = value;
+                                    objForUpdate.fields[key] = transform(value);
                                 }
                             }
+
                             // Dynamically populate fields
-                            // if(row['Primary Email1']){
-                            //     addFieldForUpdate("267139910", row['Primary Email1'], (val) => [{ type: "other", value: val }]);
-                            // }
-                            // if(row['Secondary Email1']){
-                            //     addFieldForUpdate("267139911", row['Secondary Email1'], (val) => [{ type: "other", value: val }]);
-                            // }
-                            addFieldForUpdate("267139912", row['Est Value'], (val) => parseFloat(val) || 0);
-                            addFieldForUpdate("267139913", row['Est Open Loans $'], (val) => parseFloat(val) || 0);
-                            addFieldForUpdate("267139914", row['Purchase Amt'], (val) => parseFloat(val) || 0);
-                            addFieldForUpdate("267140224", row['Default Amt'], (val) => parseFloat(val) || 0);
-                            addFieldForUpdate("267140225", row['FCL Loan Amt'], (val) => parseFloat(val) || 0);
-                            addFieldForUpdate("268908454", row['Est Equity %'], (val) => parseFloat(val) || 0);
-                            addFieldForUpdate("268908455", row['Est Equity $'], (val) => parseFloat(val) || 0);
-                            addFieldForUpdate("268908456", row['CLTV %'], (val) => parseFloat(val) || 0);
+                            addFieldForUpdate("267139912", row['Est Value'], parseFloat);
+                            addFieldForUpdate("267139913", row['Est Open Loans $'], parseFloat);
+                            addFieldForUpdate("267139914", row['Purchase Amt'], parseFloat);
+                            addFieldForUpdate("267140224", row['Default Amt'], parseFloat);
+                            addFieldForUpdate("267140225", row['FCL Loan Amt'], parseFloat);
+                            addFieldForUpdate("268908454", row['Est Equity %'], parseFloat);
+                            addFieldForUpdate("268908455", row['Est Equity $'], parseFloat);
+                            addFieldForUpdate("268908456", row['CLTV %'], parseFloat);
                             addFieldForUpdate("267139915", row['FCL Stage'], (val) => [{ value: val }]);
                             addFieldForUpdate("268923789", row['Property URL'], (val) => [{ value: val }]);
-                            addFieldForUpdate("267568787", 2, (val) => parseFloat(val) || 0);
-                            
+                            addFieldForUpdate("267568787", 2, parseFloat);
+                            addFieldForUpdate("269336248", latitude.toString());
+                            addFieldForUpdate("269336249", longitude.toString());
+
+
                             // Loop through each duplicate ID and update them
                             for (const id of ids) {
                                 try {
-                                    const updateUrl = `/item/${id}`; // Correct Podio API URL for updating an item
+                                    const updateUrl = `/item/${id}`;
+                                    const response = await podioClient.request('PUT', updateUrl, objForUpdate);
 
-                                    const response = await podioClient.request('PUT', updateUrl, objForUpdate); // Capture the response from the API
-
-                                    // Check if the response indicates success (you can adjust based on the actual response structure)
                                     if (response) {
                                         console.log(`Successfully updated item with ID: ${id}, Response:`, response);
                                     } else {
@@ -163,31 +165,35 @@ function validateDateTime(value) {
 
 
 
-// Function to create a new Podio record
 async function createPodioRecord(rowData, podioClient) {
     const url = `/item/app/${PODIO_APP_ID}/`;
+
+    // Parse and validate lat/long first
+    const latitude = parseFloat(rowData['Latitude']);
+    const longitude = parseFloat(rowData['Longitude']);
+    if (isNaN(latitude) || isNaN(longitude)) {
+        console.warn(`Skipping record creation due to invalid lat/long: ${rowData.Address}`);
+        return;
+    }
+
     // Format dates
-    const fclRecDate = rowData['FCL Rec Date']; // Assuming this is in MM/DD/YY format
+    const fclRecDate = rowData['FCL Rec Date'];
     const formattedFclRecDateTime = `${formatDate(fclRecDate)} 15:00:00`;
 
-    const fclAuctionDate = rowData['Orig Sale Date']; // Assuming this is in MM/DD/YY format
+    const fclAuctionDate = rowData['Orig Sale Date'];
     const formattedFclAuctionDateTime = `${formatDate(fclAuctionDate)} 15:00:00`;
-
-    
 
     const payload = {
         fields: {}
     };
 
-    // Helper function to add fields only if they exist and are valid
-    function addField(key, value) {
+    function addField(key, value, transform = (v) => v) {
         if (value !== undefined && value !== null && value !== '') {
-            payload.fields[key] = value;
+            payload.fields[key] = transform(value);
         }
     }
 
-    
-    // Add fields with validation
+    // Address fields
     addField("267139876", rowData.Address);
     addField("267139891", rowData.City);
     addField("267139892", rowData.State);
@@ -199,60 +205,47 @@ async function createPodioRecord(rowData, podioClient) {
     addField("267139898", rowData['Yr Built'], (val) => parseInt(val, 10));
     addField("267139899", rowData['Primary Name']);
     addField("267139900", rowData['Secondary Name'], (val) => val || 'N/A');
-    // addField("267139901", rowData['Primary Phone1'], (val) => [{ type: "mobile", value: val }]);
-    // addField("267139902", rowData['Primary Mobile Phone1'], (val) => [{ type: "mobile", value: val }]);
-    // addField("267139903", rowData['Secondary Phone1'], (val) => [{ type: "mobile", value: val }]);
-    // addField("267139904", rowData['Secondary Mobile Phone1'], (val) => [{ type: "mobile", value: val }]);
-    // addField("267139910", rowData['Primary Email1'], (val) => [{ type: "other", value: val }]);
-    // addField("267139911", rowData['Secondary Email1'], (val) => [{ type: "other", value: val }]);
+
+    // Property financials
     addField("267139912", rowData['Est Value'], (val) => parseFloat(val) || 0);
     addField("267139913", rowData['Est Open Loans $'], (val) => parseFloat(val) || 0);
     addField("267139914", rowData['Purchase Amt'], (val) => parseFloat(val) || 0);
     addField("267140224", rowData['Default Amt'], (val) => parseFloat(val) || 0);
     addField("267140225", rowData['FCL Loan Amt'], (val) => parseFloat(val) || 0);
-    addField("267568787", rowData['Skiptraced'], (val) => val === "Yes" ? 1 : 2);
     addField("268908454", rowData['Est Equity %'], (val) => parseFloat(val) || 0);
     addField("268908455", rowData['Est Equity $'], (val) => parseFloat(val) || 0);
     addField("268908456", rowData['CLTV %'], (val) => parseFloat(val) || 0);
+    addField("267568787", rowData['Skiptraced'], (val) => val === "Yes" ? 1 : 2);
+
+    // Dates
     addField("267139915", rowData['FCL Stage']);
-    // Add fields with validation
-    if (fclAuctionDate){
+    if (fclAuctionDate) {
         addField("267139916", formattedFclAuctionDateTime, (val) => val ? { start: val, end: val } : undefined);
     }
-    // Your existing code
     if (formattedFclRecDateTime && validateDateTime(formattedFclRecDateTime)) {
-        addField("267139917", formattedFclRecDateTime, (val) =>
-            val ? { start: val, end: val } : undefined
-        );
+        addField("267139917", formattedFclRecDateTime, (val) => val ? { start: val, end: val } : undefined);
     } else {
         console.log("Date is null or invalid, omitting field.");
     }
+
+    // Other metadata
     addField("267139918", rowData['Sale Place']);
     addField("268923789", rowData['Property URL']);
-    // Uncomment and add missing fields if needed
-    // addField("267139920", rowData.County);
-    // addField("267139921", rowData['Site Vacant?'], (val) => val ? 1 : 2);
-    // addField("267139922", rowData['Tax Delinquent $'], (val) => parseFloat(val) || 0);
-    // addField("267139923", rowData['Listing Status']);
-    // addField("267139924", rowData['Lis Pendens Type']);
-    // addField("267139925", rowData.Trustee);
-    // addField("267139926", rowData.Attorney);
-    // addField("267139927", rowData['Case Number']);
 
+    // ✅ Latitude & Longitude
+    addField("269336248", latitude.toString());
+    addField("269336249", longitude.toString());
 
-
-    // Log the payload before sending
 
     try {
         const response = await podioClient.request('POST', url, payload);
         console.log(`Record created:`, response.link);
     } catch (error) {
-
         console.error(`Error creating record:`, error.message);
         console.log('payload was', payload);
-        
     }
 }
+
 
 // Example usage: authenticate first, then process CSV
 const csvDirectoryPath = './paste_csv_here'; // Specify the directory path
