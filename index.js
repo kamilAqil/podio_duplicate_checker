@@ -14,7 +14,10 @@ const podio = new Podio({
     clientSecret: PODIO_CLIENT_SECRET
 });
 
-// supporting functions
+// Sleep utility
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 // Function to process all CSV files in a specified directory, passing the authenticated Podio client
 async function processCSV(directoryPath, podioClient) {
@@ -46,6 +49,7 @@ async function processCSV(directoryPath, podioClient) {
 
                         if (!hasDuplicates) {
                             await createPodioRecord(row, podioClient);
+                            await sleep(250); // throttle record creation
                         } else {
                             console.log(`Updating Row`, row.Address);
 
@@ -74,12 +78,12 @@ async function processCSV(directoryPath, podioClient) {
                             addFieldForUpdate("269336248", latitude.toString());
                             addFieldForUpdate("269336249", longitude.toString());
 
-
                             // Loop through each duplicate ID and update them
                             for (const id of ids) {
                                 try {
                                     const updateUrl = `/item/${id}`;
                                     const response = await podioClient.request('PUT', updateUrl, objForUpdate);
+                                    await sleep(250); // throttle each update call
 
                                     if (response) {
                                         console.log(`Successfully updated item with ID: ${id}, Response:`, response);
